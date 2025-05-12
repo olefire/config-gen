@@ -3,7 +3,7 @@ module github.com/olefire/config-gen
 go 1.23.8
 
 require (
-	github.com/olefire/realtime-config-go v0.0.0-20250511184300-190dbc0d58c8
+	github.com/olefire/realtime-config-go v0.0.0-20250512110300-e63e9f576b16
 	go.etcd.io/etcd/client/v3 v3.5.21
 	gopkg.in/yaml.v2 v2.4.0
 )
