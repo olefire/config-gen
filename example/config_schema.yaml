@@ -1,35 +1,35 @@
 app_name:
   type: string
-  default: "my-app"
+  default: "myapp"
   description: Название приложения
 
-max_retries:
+port:
   type: int
-  default: 5
-  description: Максимальное число попыток
+  default: 8080
+  description: Порт сервера
 
-debug:
+enable_feature:
   type: bool
-  default: false
-  description: Включение режима отладки
-
-servers:
-  type: "[]string"
-  default:
-    - server1
-    - server2
-  description: Список серверов
+  default: true
+  description: feature flag
 
 thresholds:
   type: "map[string]int"
   default:
-    cpu: 80
-    memory: 70
+    warning: 70
+    critical: 90
   description: Пороговые значения
 
-labels:
-  type: "map[string]string"
+timeout:
+  type: duration
+  default: "5s"
+  description: Таймаут ожидания ответа от сервиса
+
+
+auth_required_methods:
+  type: "map[string]struct{}"
   default:
-    env: production
-    region: us-east-1
-  description: Метки окружения
+    /api/user/profile: {}
+    /api/user/settings: {}
+    /api/orders/create: {}
+  description: Методы, требующие аутентификации

@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"text/template"
+	"time"
 
 	"gopkg.in/yaml.v2"
 )
@@ -23,6 +24,7 @@ type ConfigTemplate struct {
 	PackageName string
 	StructName  string
 	Fields      []Field
+	UsesTime    bool
 }
 
 type Field struct {
@@ -48,10 +50,13 @@ func main() {
 		log.Fatal(err)
 	}
 
+	fields, usesTime := parseFields(config)
+
 	tmplData := ConfigTemplate{
 		PackageName: "config",
 		StructName:  "AppConfig",
-		Fields:      parseFields(config),
+		Fields:      fields,
+		UsesTime:    usesTime,
 	}
 
 	writeConfig(tmplData)
@@ -60,70 +65,134 @@ func main() {
 	fmt.Println("✅ Конфигурационный код сгенерирован в", "internal/config")
 }
 
-func parseFields(config map[string]FieldSpec) []Field {
+func parseFields(config map[string]FieldSpec) ([]Field, bool) {
 	var fields []Field
+	usesTime := false
+
 	for name, spec := range config {
+		goType := spec.Type
+		if goType == "duration" {
+			goType = "time.Duration"
+			usesTime = true
+		}
+
 		field := Field{
 			OriginalName: name,
 			Name:         toCamel(name),
 			VarName:      toLowerCamel(name),
-			Type:         spec.Type,
-			Default:      formatDefaultValue(spec.Default),
+			Type:         goType,
+			Default:      formatDefaultValue(spec.Default, spec.Type),
 			Description:  spec.Description,
 		}
 		fields = append(fields, field)
 	}
-	return fields
+	return fields, usesTime
 }
 
-func formatDefaultValue(val any) string {
+func formatDefaultValue(val any, specType string) string {
+	if specType == "duration" {
+		if str, ok := val.(string); ok {
+			return fmt.Sprintf(`func() time.Duration {
+				d, _ := time.ParseDuration("%s")
+				return d
+			}()`, str)
+		}
+	}
+
 	switch v := val.(type) {
 	case string:
+		if str, ok := val.(string); ok {
+			if looksLikeDuration(str) {
+				return fmt.Sprintf(`func() time.Duration {
+				d, _ := time.ParseDuration("%s")
+				return d
+			}()`, str)
+			}
+		}
+
 		return fmt.Sprintf("%q", v)
 	case int, int64, float64, bool:
 		return fmt.Sprintf("%v", v)
+
 	case []any:
-		var elems []string
-		for _, e := range v {
-			elems = append(elems, formatDefaultValue(e))
+		if len(v) == 0 {
+			return "[]any{}"
 		}
-		return fmt.Sprintf("[]string{%s}", strings.Join(elems, ", "))
+		elemType := detectType(v[0])
+		elems := make([]string, len(v))
+		for i, e := range v {
+			elems[i] = formatDefaultValue(e, detectType(e))
+		}
+		return fmt.Sprintf("[]%s{%s}", elemType, strings.Join(elems, ", "))
+
 	case map[any]any:
-		var entries []string
-		isStringMap := true
-		isIntMap := true
-		for _, val := range v {
-			switch val.(type) {
-			case string:
-				isIntMap = false
-			case int, int64:
-				isStringMap = false
-			default:
-				isStringMap = false
-				isIntMap = false
-			}
+		if len(v) == 0 {
+			return "map[any]any{}"
 		}
 
-		switch {
-		case isStringMap:
-			for k, val := range v {
-				entries = append(entries, fmt.Sprintf("%q: %q", k, val))
+		allStructEmpty := true
+		allKeysAreStrings := true
+		for k, val := range v {
+			if _, ok := k.(string); !ok {
+				allKeysAreStrings = false
 			}
-			return fmt.Sprintf("map[string]string{%s}", strings.Join(entries, ", "))
-		case isIntMap:
-			for k, val := range v {
-				entries = append(entries, fmt.Sprintf("%q: %v", k, val))
+			if _, ok := val.(map[any]any); !ok || len(val.(map[any]any)) > 0 {
+				allStructEmpty = false
 			}
-			return fmt.Sprintf("map[string]int{%s}", strings.Join(entries, ", "))
-		default:
-			for k, val := range v {
-				entries = append(entries, fmt.Sprintf("%q: %#v", k, val))
-			}
-			return fmt.Sprintf("map[string]any{%s}", strings.Join(entries, ", "))
 		}
+		if allKeysAreStrings && allStructEmpty {
+			keys := make([]string, 0, len(v))
+			for k := range v {
+				keys = append(keys, fmt.Sprintf("%q: struct{}{}", k))
+			}
+			return fmt.Sprintf("map[string]struct{}{%s}", strings.Join(keys, ", "))
+		}
+
+		keyType := detectType(getFirstMapKey(v))
+		valType := detectType(getFirstMapValue(v))
+
+		entries := make([]string, 0, len(v))
+		for k, val := range v {
+			entries = append(entries, fmt.Sprintf("%s: %s", formatDefaultValue(k, detectType(k)), formatDefaultValue(val, detectType(val))))
+		}
+		return fmt.Sprintf("map[%s]%s{%s}", keyType, valType, strings.Join(entries, ", "))
+
 	default:
 		return fmt.Sprintf("%#v", val)
 	}
+}
+
+func detectType(val any) string {
+	switch val.(type) {
+	case string:
+		return "string"
+	case int, int64:
+		return "int"
+	case float64:
+		return "float64"
+	case bool:
+		return "bool"
+	case map[any]any:
+		return "map[string]any"
+	case []any:
+		return "[]any"
+	default:
+		return "any"
+	}
+}
+
+func getFirstMapKey(m map[any]any) any {
+	for k := range m {
+		return k
+	}
+	return nil
+}
+
+func getFirstMapValue(m map[any]any) any {
+	for _, v := range m {
+		return v
+	}
+	return nil
 }
 
 func toCamel(input string) string {
@@ -137,6 +206,11 @@ func toCamel(input string) string {
 func toLowerCamel(input string) string {
 	camel := toCamel(input)
 	return strings.ToLower(camel[:1]) + camel[1:]
+}
+
+func looksLikeDuration(s string) bool {
+	_, err := time.ParseDuration(s)
+	return err == nil
 }
 
 func writeConfig(tmplData ConfigTemplate) {
@@ -184,11 +258,14 @@ func writeFake(tmplData ConfigTemplate) {
 	}
 }
 
-const configTemplate = `// Code generated by generator; DO NOT EDIT.
+const configTemplate = `// Code generated by config-gen; DO NOT EDIT.
 package {{.PackageName}}
 
 import (
 	"context"
+	{{- if .UsesTime }}
+	"time"
+	{{- end }}
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 	konfig "github.com/olefire/realtime-config-go"
@@ -224,8 +301,14 @@ func (c *appConfig) Get{{.Name}}() {{.Type}} {
 {{end}}
 `
 
-const fakeTemplate = `// Code generated by generator; DO NOT EDIT.
+const fakeTemplate = `// Code generated by config-gen; DO NOT EDIT.
 package {{.PackageName}}
+
+	{{- if .UsesTime }}
+	import (
+	"time"
+	)
+	{{- end }}
 
 type FakeAppConfig struct {
 	{{- range .Fields}}
