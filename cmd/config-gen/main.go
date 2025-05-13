@@ -7,6 +7,7 @@ import (
 	"go/format"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -92,10 +93,12 @@ func parseFields(config map[string]FieldSpec) ([]Field, bool) {
 func formatDefaultValue(val any, specType string) string {
 	if specType == "duration" {
 		if str, ok := val.(string); ok {
-			return fmt.Sprintf(`func() time.Duration {
-				d, _ := time.ParseDuration("%s")
-				return d
-			}()`, str)
+			str = normalizeDuration(str)
+			if d, err := time.ParseDuration(str); err == nil {
+				return fmt.Sprintf("%d * time.Nanosecond", d.Nanoseconds())
+			} else {
+				log.Fatalf("invalid duration string %q: %v", str, err)
+			}
 		}
 	}
 
@@ -211,6 +214,34 @@ func toLowerCamel(input string) string {
 func looksLikeDuration(s string) bool {
 	_, err := time.ParseDuration(s)
 	return err == nil
+}
+
+func normalizeDuration(s string) string {
+	s = strings.TrimSpace(s)
+	switch {
+	case strings.HasSuffix(s, "d"):
+		num := strings.TrimSuffix(s, "d")
+		n, err := strconv.Atoi(num)
+		if err != nil {
+			log.Fatalf("invalid number in duration %q: %v", s, err)
+		}
+		return fmt.Sprintf("%dh", n*24)
+
+	case strings.HasSuffix(s, "w"):
+		num := strings.TrimSuffix(s, "w")
+		n, err := strconv.Atoi(num)
+		if err != nil {
+			log.Fatalf("invalid number in duration %q: %v", s, err)
+		}
+		return fmt.Sprintf("%dh", n*24*7)
+
+	case strings.HasSuffix(s, "ms"), strings.HasSuffix(s, "s"), strings.HasSuffix(s, "m"), strings.HasSuffix(s, "h"):
+		return s
+
+	default:
+		log.Fatalf("unsupported duration suffix in %q — allowed: ms, s, m, h, d, w", s)
+		return ""
+	}
 }
 
 func writeConfig(tmplData ConfigTemplate) {
