@@ -1,0 +1,28 @@
+max_retries:
+  type: int
+  default: 5
+  description: Максимальное число попыток
+
+enable_feature:
+  type: bool
+  default: true
+  description: feature flag
+
+batch_size:
+  type: int
+  default: 100
+  description: Размер батча
+
+timeout:
+  type: duration
+  default: "5d"
+  description: Таймаут ожидания ответа от сервиса
+
+auth_required_methods:
+  type: "map[string]struct{}"
+  default:
+    /api/user/profile: {}
+    /api/user/settings: {}
+    /api/orders/create: {}
+  description: Auth required
+
